@@ -18,10 +18,12 @@ st.set_page_config(page_title="AI 智能科研与商业数据穿透 Agent", layo
 if "analyzed" not in st.session_state: st.session_state.analyzed = False
 if "file_type" not in st.session_state: st.session_state.file_type = "" # 'text' 或 'dataset'
 if "raw_text" not in st.session_state: st.session_state.raw_text = ""
+if "outline" not in st.session_state: st.session_state.outline = ""
 if "df_cleaned" not in st.session_state: st.session_state.df_cleaned = None
 if "df_hierarchical" not in st.session_state: st.session_state.df_hierarchical = None
 if "diagnostic_report" not in st.session_state: st.session_state.diagnostic_report = {}
-if "chat_history" not in st.session_state: st.session_state.chat_history = []
+if "chat_history_dataset" not in st.session_state: st.session_state.chat_history_dataset = []
+if "chat_history_text" not in st.session_state: st.session_state.chat_history_text = []
 
 # 自适应列名映射词条字典
 COLUMN_MAP = {
@@ -120,11 +122,11 @@ def process_dataset_locally(uploaded_file):
     ratio = avg_rev_C / avg_rev_A if avg_rev_A > 0 else 0
     
     if ratio <= 0.10:
-        warning = f"【裁剪预警】C类均值仅为A类的 {ratio*100:.1f}%，大类分化严重，建议整体裁剪C类。"
+        warning = f"【裁剪预警】C类均值仅为A类的 {ratio*100:.1f}%，大类分化严重，系统建议：您可以果断砍掉整个C类品类，将资源集中于核心业务。"
     elif ratio >= 0.90:
-        warning = f"【结构预警】C类均值达A类的 {ratio*100:.1f}%，品类大类间大体平衡，不宜盲目砍掉，请执行单品淘汰。"
+        warning = f"【结构预警】C类均值达A类的 {ratio*100:.1f}%，品类大类间大体平衡，不宜盲目砍掉整个大类，请转而执行底层低效单品的精准淘汰。"
     else:
-        warning = f"【混合预警】C类均值为A类的 {ratio*100:.1f}%，处于中游，建议保持关注并精准下架低效具体单品。"
+        warning = f"【混合预警】C类均值为A类的 {ratio*100:.1f}%，处于中游，建议保持现有大类关注，并精准下架拖后腿的低效具体单品。"
         
     # 高阶统计学假设检验建议引擎 (满足要求4)
     stat_advise = "【统计学模型方向建议】：\n"
@@ -185,17 +187,20 @@ with st.sidebar:
             st.session_state.df_hierarchical = df_hier
             st.session_state.diagnostic_report = r_dict
             st.session_state.analyzed = True
+            # 清空历史，防止跨文件混淆
+            st.session_state.chat_history_dataset = []
         else:
             st.session_state.file_type = "text"
             if not api_key:
                 st.error("🔒 分析非结构化文本内容，必须先在上方配置您的 AI API Key！")
             else:
-                with St.spinner("AI 正在对文本文件做结构化大纲提炼..."):
+                with st.spinner("AI 正在对文本文件做结构化大纲提炼..."):
                     text_content = extract_text_from_doc(uploaded_file)
                     st.session_state.raw_text = text_content
                     prompt = f"请对以下学术/商业文本进行逻辑大纲提取（包含引言、研究对象、核心重点、数据结论或建议）：\n\n{text_content[:6000]}"
                     st.session_state.outline = call_ai_agent(ai_provider, api_key, prompt)
                     st.session_state.analyzed = True
+                    st.session_state.chat_history_text = []
         st.rerun()
 
 # ==========================================
@@ -223,6 +228,7 @@ else:
                 ax1.pie(df_c['total_revenue'], labels=df_c['category'], autopct='%1.1f%%', startangle=90)
                 ax1.set_title("品类宏观整体利润占比")
                 st.pyplot(fig1)
+                plt.close(fig1)
             with col_g2:
                 fig2, ax2 = plt.subplots(figsize=(6, 4))
                 comp_df = pd.concat([st.session_state.diagnostic_report["top_cat"], st.session_state.diagnostic_report["bottom_cat"]])
@@ -230,6 +236,7 @@ else:
                 ax2.set_title("宏观优劣品类两极分化测度")
                 ax2.invert_yaxis()
                 st.pyplot(fig2)
+                plt.close(fig2)
                 
             st.markdown("#### 📂 穿透级联报表下载区 (已自动创建并归档)")
             col_d1, col_d2 = st.columns(2)
@@ -258,12 +265,17 @@ else:
             if not api_key:
                 st.error("🔒 请在侧边栏输入您的 API Key 以激活 AI 对话功能。")
             else:
-                for msg in st.session_state.chat_history:
-                    with st.chat_message(msg["role"]): st.markdown(msg["content"])
+                # 渲染数据集独有的对话流
+                for msg in st.session_state.chat_history_dataset:
+                    with st.chat_message(msg["role"]): 
+                        st.markdown(msg["content"])
                 
-                if chat_input := st.chat_input("针对刚才生成的清洗报告或统计检验方向，对 AI 提问..."):
-                    with st.chat_message("user"): st.markdown(chat_input)
-                    st.session_state.chat_history.append({"role": "user", "content": chat_input})
+                # 为该输入框设定全局唯一 Key：input_dataset
+                dataset_input = st.chat_input("针对刚才生成的清洗报告或统计检验方向，对 AI 提问...", key="input_dataset")
+                if dataset_input:
+                    with st.chat_message("user"): 
+                        st.markdown(dataset_input)
+                    st.session_state.chat_history_dataset.append({"role": "user", "content": dataset_input})
                     
                     with st.chat_message("assistant"):
                         with st.spinner("AI 正在深度透视底层数据并生成商业故事线..."):
@@ -275,11 +287,12 @@ else:
                             - 利润最高的单品ID为: {st.session_state.diagnostic_report['top_prod']['product_id'].tolist()}
                             
                             请基于精益创业和科学实证的逻辑，针对用户的提问进行解答，提供答辩话术或优化建策：
-                            用户问题：{chat_input}
+                            用户问题：{dataset_input}
                             """
                             reply = call_ai_agent(ai_provider, api_key, context)
                             st.markdown(reply)
-                    st.session_state.chat_history.append({"role": "assistant", "content": reply})
+                    st.session_state.chat_history_dataset.append({"role": "assistant", "content": reply})
+                    st.rerun()
 
     # ------------------ 分流看板 B：传统文本处理流 ------------------
     else:
@@ -289,14 +302,22 @@ else:
             st.markdown(st.session_state.outline)
         with tab_chat:
             st.markdown("### 💬 学术论文/课件出题与辩论")
-            for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]): st.markdown(msg["content"])
-            if chat_input := st.chat_input("请输入您想针对本篇课件/论文探讨的概念或模拟出题..."):
-                with st.chat_message("user"): st.markdown(chat_input)
-                st.session_state.chat_history.append({"role": "user", "content": chat_input})
+            # 渲染文本类独有的对话流
+            for msg in st.session_state.chat_history_text:
+                with st.chat_message(msg["role"]): 
+                    st.markdown(msg["content"])
+                    
+            # 为该输入框设定全局唯一 Key：input_text
+            text_input = st.chat_input("请输入您想针对本篇课件/论文探讨的概念或模拟出题...", key="input_text")
+            if text_input:
+                with st.chat_message("user"): 
+                    st.markdown(text_input)
+                st.session_state.chat_history_text.append({"role": "user", "content": text_input})
+                
                 with st.chat_message("assistant"):
                     with st.spinner("AI 正在检索上下文..."):
-                        context = f"你是一个学术助教。基于用户上传的文本片段：{st.session_state.raw_text[:3000]}。请回答：{chat_input}"
+                        context = f"你是一个学术助教。基于用户上传的文本片段：{st.session_state.raw_text[:3000]}。请回答：{text_input}"
                         reply = call_ai_agent(ai_provider, api_key, context)
                         st.markdown(reply)
-                st.session_state.chat_history.append({"role": "assistant", "content": reply})
+                st.session_state.chat_history_text.append({"role": "assistant", "content": reply})
+                st.rerun()
